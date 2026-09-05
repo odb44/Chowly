@@ -72,7 +72,7 @@ interface PaymentResponse {
   method?: string
 }
 
-const API_BASE_URL = 'http://localhost:8080/api'
+const API_BASE_URL = 'https://chowly-backend-ywdp.onrender.com/api'
 
 function App() {
   const [role, setRole] = useState<Role>('CUSTOMER')
@@ -4393,4 +4393,5 @@ function App() {
 }
 
 export default App
+
 
