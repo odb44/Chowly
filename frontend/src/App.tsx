@@ -74,6 +74,50 @@ interface PaymentResponse {
 
 const API_BASE_URL = 'https://chowly-backend-ywdp.onrender.com/api'
 
+function parseBackendDateTime(orderDate: string) {
+  if (!orderDate) {
+    return NaN
+  }
+
+  // Spring Boot LocalDateTime values from the deployed backend have no
+  // timezone/offset. Render runs the backend on UTC, so interpret the
+  // database timestamp as UTC before comparing it with the browser clock.
+  const hasTimezone =
+      orderDate.endsWith('Z') ||
+      /[+-]\\d{2}:?\\d{2}$/.test(orderDate)
+
+  return new Date(
+      hasTimezone ? orderDate : `${orderDate}Z`,
+  ).getTime()
+}
+
+function getRemainingWaitTime(order: OrderResponse) {
+  const orderTime = parseBackendDateTime(order.orderDate)
+
+  if (Number.isNaN(orderTime)) {
+    return order.estimatedWaitTime
+  }
+
+  const elapsedMinutes =
+      (Date.now() - orderTime) / 60000
+
+  return order.estimatedWaitTime - elapsedMinutes
+}
+
+function formatRemainingWaitTime(minutes: number) {
+  const absoluteMinutes = Math.abs(minutes)
+  const wholeMinutes = Math.floor(absoluteMinutes)
+  const seconds = Math.floor(
+      (absoluteMinutes * 60) % 60,
+  )
+
+  return `${minutes < 0 ? '-' : ''}${wholeMinutes
+      .toString()
+      .padStart(2, '0')}:${seconds
+      .toString()
+      .padStart(2, '0')}`
+}
+
 function App() {
   const [role, setRole] = useState<Role>('CUSTOMER')
 
@@ -115,6 +159,9 @@ function App() {
   const [currentOrder, setCurrentOrder] =
       useState<OrderResponse | null>(null)
 
+  const [remainingWaitTime, setRemainingWaitTime] =
+      useState(0)
+
   // Waiter state
   const [waiterOrders, setWaiterOrders] =
       useState<OrderResponse[]>([])
@@ -141,9 +188,43 @@ function App() {
   const [waiterActionMessage, setWaiterActionMessage] =
       useState('')
 
+  const [waiterRemainingWaitTimes, setWaiterRemainingWaitTimes] =
+      useState<Record<number, number>>({})
+
   useEffect(() => {
     loadInitialData()
   }, [])
+
+  useEffect(() => {
+    if (!currentOrder) {
+      setRemainingWaitTime(0)
+      return
+    }
+
+    const updateRemainingWaitTime = () => {
+      if (
+          currentOrder.status === 'SERVED' ||
+          currentOrder.status === 'PAID'
+      ) {
+        setRemainingWaitTime(0)
+        return
+      }
+
+      setRemainingWaitTime(
+          getRemainingWaitTime(currentOrder),
+      )
+    }
+
+    updateRemainingWaitTime()
+
+    const timer = setInterval(
+        updateRemainingWaitTime,
+        1000,
+    )
+
+    return () => clearInterval(timer)
+  }, [currentOrder])
+
 
   useEffect(() => {
     if (!currentOrder) {
@@ -158,6 +239,41 @@ function App() {
       window.clearInterval(interval)
     }
   }, [currentOrder?.id])
+
+  useEffect(() => {
+    if (role !== 'WAITER' || waiterOrders.length === 0) {
+      setWaiterRemainingWaitTimes({})
+      return
+    }
+
+    const updateWaiterRemainingWaitTimes = () => {
+      const nextTimes: Record<number, number> = {}
+
+      waiterOrders.forEach((order) => {
+        if (
+            order.status === 'SERVED' ||
+            order.status === 'PAID'
+        ) {
+          nextTimes[order.id] = 0
+        } else {
+          nextTimes[order.id] =
+              getRemainingWaitTime(order)
+        }
+      })
+
+      setWaiterRemainingWaitTimes(nextTimes)
+    }
+
+    updateWaiterRemainingWaitTimes()
+
+    const timer = setInterval(
+        updateWaiterRemainingWaitTimes,
+        1000,
+    )
+
+    return () => clearInterval(timer)
+  }, [role, waiterOrders])
+
 
   useEffect(() => {
     if (role === 'WAITER') {
@@ -1016,7 +1132,7 @@ function App() {
           hour: '2-digit',
           minute: '2-digit',
         },
-    ).format(new Date(orderDate))
+    ).format(new Date(parseBackendDateTime(orderDate)))
   }
 
   function formatOrderDate(
@@ -1034,7 +1150,7 @@ function App() {
           hour: '2-digit',
           minute: '2-digit',
         },
-    ).format(new Date(orderDate))
+    ).format(new Date(parseBackendDateTime(orderDate)))
   }
 
   function getStatusLabel(
@@ -1531,16 +1647,16 @@ function App() {
 
                           <strong
                               style={{
-                                fontSize:
-                                    '28px',
+                                fontSize: '28px',
                                 color:
-                                    '#17231b',
+                                    remainingWaitTime < 0
+                                        ? '#c0392b'
+                                        : '#17231b',
                               }}
                           >
-                            {
-                              currentOrder.estimatedWaitTime
-                            }{' '}
-                            min
+                            {formatRemainingWaitTime(
+                                remainingWaitTime,
+                            )}
                           </strong>
                         </div>
                       </div>
@@ -3308,11 +3424,32 @@ function App() {
                                                   '10px',
                                             }}
                                         >
-                              <span>
-                                {
-                                  order.estimatedWaitTime
-                                }{' '}
-                                min estimated
+                              <span
+                                  style={{
+                                    color:
+                                        order.status === 'SERVED' ||
+                                        order.status === 'PAID'
+                                            ? '#28623b'
+                                            : (
+                                                waiterRemainingWaitTimes[order.id] ??
+                                                getRemainingWaitTime(order)
+                                            ) < 0
+                                                ? '#c0392b'
+                                                : '#9aa19b',
+                                    fontWeight:
+                                        order.status === 'SERVED' ||
+                                        order.status === 'PAID'
+                                            ? 800
+                                            : 700,
+                                  }}
+                              >
+                                {order.status === 'SERVED' ||
+                                order.status === 'PAID'
+                                    ? 'Completed'
+                                    : `${formatRemainingWaitTime(
+                                        waiterRemainingWaitTimes[order.id] ??
+                                        getRemainingWaitTime(order),
+                                    )} remaining`}
                               </span>
 
                                           <span>
@@ -3659,7 +3796,18 @@ function App() {
                             {
                               label:
                                   'Estimated wait',
-                              value: `${selectedWaiterOrder.estimatedWaitTime} min`,
+                              value:
+                                  selectedWaiterOrder.status === 'SERVED' ||
+                                  selectedWaiterOrder.status === 'PAID'
+                                      ? 'Completed'
+                                      : formatRemainingWaitTime(
+                                          waiterRemainingWaitTimes[
+                                              selectedWaiterOrder.id
+                                              ] ??
+                                          getRemainingWaitTime(
+                                              selectedWaiterOrder,
+                                          ),
+                                      ),
                             },
                             {
                               label:
@@ -4393,5 +4541,3 @@ function App() {
 }
 
 export default App
-
-
